@@ -1,0 +1,176 @@
+Making new patient characteristic table (table 1), comparing between repeater type 
+
+# Libraries
+```{r}
+library(tidyverse)
+library(here)
+```
+
+# Data 
+```{r}
+# First trying with Illinois only 
+states <- c("IL")
+
+all_states <- vector("list", length = length(states))
+for(st in seq_along(states)){
+  
+  save_name <- paste0("tab1_chars_", states[[st]], ".csv")
+  state <- read_csv(here("Trunk", "Derived", "new_patient_char", save_name))
+  
+  all_states[[st]] <- state
+}
+
+all_states <- bind_rows(all_states)
+```
+
+# Lists 
+```{r}
+# Diagnosis SMI 
+DGNS_CD_SCZ <- c('F200', 'F201', 'F202', 'F203', 'F205', 'F2081', 'F2089', 'F209', 'F250', 'F251', 'F258', 'F259')
+
+DGNS_CD_BD <- c('F3010','F3011','F3012','F3013','F302','F303','F304','F308','F309','F310','F3110','F3111','F3112','F3113','F312','F3130','F3131','F3132','F314','F315','F3160','F3161','F3162','F3163','F3164','F3170','F3171','F3172','F3173','F3174','F3175','F3176','F3177','F3178','F3181','F3189','F319')
+
+DGNS_CD_MDD <- c('F320','F321','F322','F323','F324','F325','F329','F330','F331','F332','F333','F3340','F3341','F3342','F339','F341')
+
+DGNS_CD_PSYCH <- c('F060', 'F061', 'F062', 'F0630', 'F0631', 'F0632', 'F0633', 'F0634', 'F064', 'F0670', 'F0671', 'F068', 'F22', 'F23', 'F24', 'F28', 'F29', 'F302', 'F312', 'F315', 'F3164', 'F323', 'F333', 'F4489')
+
+smi <- c(DGNS_CD_BD, DGNS_CD_MDD, DGNS_CD_SCZ, DGNS_CD_PSYCH)
+
+code_zero <- grep("0$", smi, value = TRUE)
+code_nozero <- sub("0$", "", code_zero)
+
+smi_code <- unique(c(smi, code_nozero))
+
+smi_code <- gsub("\\.", "", smi_code)
+
+# Diagnosis SUD 
+# ICD-10 codes F10-F19 (this is the same way the SUD_DGNS_IND is coded in TAF)
+sud_list <- paste0("F", 10:19)
+
+```
+
+
+# Making the table 
+```{r}
+check <- all_states %>% 
+  # Check for the first visit diagnosis type 
+  mutate(visit1_SUD = if_else(substr(visit1_dgns_1, 1, 3) %in% sud_list | substr(visit1_dgns_2, 1, 3) %in% sud_list, 1, 0),
+         visit1_SMI = if_else(visit1_dgns_1 %in% smi_code | visit1_dgns_2 %in% smi_code, 1, 0)) %>% 
+  mutate(
+    spell_length = ifelse(repeat_visits == 0, "One Visit", "More Than One Visit"),
+    spell_length = factor(spell_length, levels = c("One Visit", "More Than One Visit")),
+
+    # Age groups
+    age_group = case_when(
+      AGE >= 13 & AGE <= 17 ~ "13-17",
+      AGE >= 18 & AGE <= 25 ~ "18-25",
+      AGE >= 26 & AGE <= 45 ~ "26-45",
+      AGE >= 46 & AGE <= 62 ~ "46-62",
+      TRUE ~ NA_character_
+    ),
+    age_group = factor(age_group, levels = c("13-17", "18-25", "26-45", "46-62")),
+
+    # Sex
+    sex_label = ifelse(SEX_CD == "F", "Female", "Male"),
+
+    # Binary flags — adjust the values if yours differ
+    visit1_SMI = as.numeric(visit1_SMI),
+    visit1_SUD = as.numeric(visit1_SUD),
+    last_year_bh_ip  = as.numeric(last_year_bh_ip),
+    last_year_bh_ed  = as.numeric(last_year_bh_ed),
+    last_year_any_ed = as.numeric(last_year_any_ed)
+  )
+
+# Create functions 
+# For catergorical variables
+cat_row <- function(data, var, level, label){
+  data %>% 
+    group_by(spell_length) %>% 
+    summarise(n = sum(.data[[var]] == level, na.rm = TRUE),
+              pct = mean(.data[[var]] == level, na.rm = TRUE) * 100,
+              .groups = "drop") %>% 
+    mutate(cell = sprintf("%d (%.1f%%)", n, pct)) %>%
+    select(spell_length, cell) %>%
+    tidyr::pivot_wider(names_from = spell_length, values_from = cell) %>%
+    mutate(Category = "", Variable = label) %>%
+    select(Category, Variable, `One Visit`, `More Than One Visit`)
+}
+
+# For binary variables 
+bin_row <- function(data, var, label) {
+  data %>%
+    group_by(spell_length) %>%
+    summarise(
+      n   = sum(.data[[var]] == 1, na.rm = TRUE),
+      pct = mean(.data[[var]] == 1, na.rm = TRUE) * 100,
+      .groups = "drop"
+    ) %>%
+    mutate(cell = sprintf("%d (%.1f%%)", n, pct)) %>%
+    select(spell_length, cell) %>%
+    tidyr::pivot_wider(names_from = spell_length, values_from = cell) %>%
+    mutate(Category = "", Variable = label) %>%
+    select(Category, Variable, `One Visit`, `More Than One Visit`)
+}
+
+# This is done differently because the denominator of the percentage is different 
+# number of patients with one visit / total number of new patients 
+total_row <- check %>%
+  group_by(spell_length) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  mutate(
+    pct  = n / sum(n) * 100,
+    cell = sprintf("%d (%.1f%%)", n, pct)
+  ) %>%
+  select(spell_length, cell) %>%
+  tidyr::pivot_wider(names_from = spell_length, values_from = cell) %>%
+  mutate(Category = "Total (N(%))", Variable = "") %>%
+  select(Category, Variable, `One Visit`, `More Than One Visit`)
+
+
+age_rows <- bind_rows(
+  cat_row(check, "age_group", "13-17", "13-17"),
+  cat_row(check, "age_group", "18-25", "18-25"),
+  cat_row(check, "age_group", "26-45", "26-45"),
+  cat_row(check, "age_group", "46-62", "46-62")
+) %>% mutate(Category = ifelse(row_number() == 1, "Age in 2021", ""))
+
+sex_rows <- bind_rows(
+  cat_row(check, "sex_label", "Female", "Female"),
+  cat_row(check, "sex_label", "Male",   "Male")
+) %>% mutate(Category = ifelse(row_number() == 1, "Sex", ""))
+
+dx_rows <- bind_rows(
+  bin_row(check, "visit1_SMI", "Any SMI"),
+  bin_row(check, "visit1_SUD", "Any SUD")
+) %>% mutate(Category = ifelse(row_number() == 1, "Diagnosis at first visit", ""))
+
+hx_rows <- bind_rows(
+  bin_row(check, "last_year_bh_ip",  "Behavioral Health Related Inpatient Care"),
+  bin_row(check, "last_year_bh_ed",  "Behavioral Health Related ED Visit"),
+  bin_row(check, "last_year_any_ed", "Any ED Visit")
+) %>% mutate(Category = ifelse(row_number() == 1, "Previous year health history", ""))
+
+table_data <- bind_rows(total_row, age_rows, sex_rows, dx_rows, hx_rows)
+
+
+```
+
+# Repeat number histogram
+```{r}
+library(ggplot2)
+
+ggplot(all_states, aes(x = repeat_visits)) + 
+  geom_histogram(binwidth = 20, fill="#69b3a2", color="#e9ecef", alpha=0.9) +
+  labs(x = "Number of visits")
+
+
+suppress_20 <- all_states %>% 
+  mutate(repeat_visits = if_else(repeat_visits > 20, 20, repeat_visits))
+
+ggplot(suppress_20, aes(x = repeat_visits)) + 
+  geom_histogram(binwidth = 1, fill="#69b3a2", color="#e9ecef", alpha=0.9) +
+  labs(x = "Number of visits")
+
+
+```
+

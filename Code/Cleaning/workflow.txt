@@ -1,0 +1,14 @@
+Last Updated: April 29, 2026
+
+1. Cleaning/Find_NPI.R: 
+- Finding all billing provider NPIs that were billed at CMHCs (based on POS_CD)
+- Look at the NPPES file and identify the addresses that are associated with the 
+  NPIs found (The NPPES files were modified before uploading to milgram since it
+  was too big. The filtering is done in the NPPES_cleaning.R on my pc)
+
+2. Cleaning/Find_patient.R
+- Identify all CMHC patients, and then filter for the age, enrollment, and eligibility 
+- Filter to only new patients, check CMHC repeating 
+- Check previous year health history 
+
+3. Analysis/new_patient_analysis.Rmd
