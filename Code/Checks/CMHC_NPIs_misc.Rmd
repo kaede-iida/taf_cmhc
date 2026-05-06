@@ -1,0 +1,95 @@
+# Libraries
+```{r}
+library(here)
+library(tidyverse)
+library(haven)
+```
+
+# Check1: Stata match with NPPES (both entity type) and CMHC NPI from Find_NPI.R
+Are the CMHC NPI associated with entity type = 1 happening at the same time as an org type CMHC
+```{r}
+indiv_cmhc <- read_dta(here("Trunk", "Derived", "NBER_NPPES", "known_cmhc.dta")) %>% 
+  filter(entity == 1) %>% 
+  pull(NPI)
+
+# Check with IL: are there same-day claims?
+# Claims that are billed by the individual type NPI (that was at least once coupled with POS_CD = CMHC)
+indiv_dates <- open_dataset("/gpfs/milgram/pi/medicaid_lab/data/cms/ingested/TMSIS_taf/taf_other_services_header/year=2022/state=IL/data.parquet") |>
+  select(BENE_ID, CLM_ID, BLG_PRVDR_NPI, SRVC_BGN_DT) |>
+  filter(BLG_PRVDR_NPI %in% indiv_cmhc) |>
+  collect() |>
+  filter(!is.na(BENE_ID)) |>
+  rename(indiv_claim = CLM_ID,
+         indiv_NPI = BLG_PRVDR_NPI)
+
+# Find the claims with the same beneficiary on the same date 
+same_day_visit <- open_dataset("/gpfs/milgram/pi/medicaid_lab/data/cms/ingested/TMSIS_taf/taf_other_services_header/year=2022/state=IL/data.parquet") |>
+  select(BENE_ID, CLM_ID, BLG_PRVDR_NPI, SRVC_BGN_DT, POS_CD) |>
+  filter(!CLM_ID %in% indiv_dates$indiv_claim) |>
+  inner_join(indiv_dates, by = c("BENE_ID", "SRVC_BGN_DT")) |>
+  collect()
+
+# Of all the claims that were on the same day, remove if there is no chance of being a CMHC 
+# (somewhere else is already specified by the POS_CD)
+cmhc_or_na <- same_day_visit %>% 
+  filter(POS_CD == "53" | is.na(POS_CD)) %>% 
+  mutate(match = 1) %>% 
+  select(indiv_claim, POS_CD, match) %>% 
+  right_join(indiv_dates, by = "indiv_claim") %>% 
+  group_by(indiv_claim) %>% 
+  slice(1) %>% 
+  mutate(match = if_else(is.na(match), 0, match))
+
+# Of the matches, how many are CMHCs for sure (through POS) and how many are NA?
+na_summary <- cmhc_or_na %>% 
+  filter(match == 1) %>% 
+  group_by(POS_CD) %>% 
+  summarise(count = n())
+```
+
+# Check2: What are the non-matches?
+There are 6% of non-matches, even when I include the individual-type NPI. Compare the number 
+of claims that are associated with non-matches, organization-type NPI, and individual-type NPI
+```{r}
+indiv_npi <- read_dta(here("Trunk", "Derived", "NBER_NPPES", "known_cmhc.dta")) %>% 
+  filter(entity == 1) %>% 
+  pull(NPI)
+
+org_npi <- read_dta(here("Trunk", "Derived", "NBER_NPPES", "known_cmhc.dta")) %>% 
+  filter(entity == 2) %>% 
+  pull(NPI)
+
+nonmatch <- open_dataset(here("Trunk", "Derived", "all_states_cmhc.parquet")) |>
+  collect() |>
+  filter(!is.na(BLG_PRVDR_NPI)) |>
+  filter(!(BLG_PRVDR_NPI %in% indiv_npi | BLG_PRVDR_NPI %in% org_npi)) |>
+  rename(NPI = BLG_PRVDR_NPI) |>
+  distinct(NPI) |>
+  pull(NPI)
+
+# Check with IL 
+claim_count <- open_dataset("/gpfs/milgram/pi/medicaid_lab/data/cms/ingested/TMSIS_taf/taf_other_services_header/year=2022/state=IL/data.parquet") |>
+  filter(BLG_PRVDR_NPI %in% indiv_npi | BLG_PRVDR_NPI %in% org_npi | BLG_PRVDR_NPI %in% nonmatch) |>
+  select(CLM_ID, BENE_ID, SRVC_BGN_DT, BLG_PRVDR_NPI) |>
+  collect() |>
+  mutate(npi_type = case_when(BLG_PRVDR_NPI %in% indiv_npi ~ "individual",
+                              BLG_PRVDR_NPI %in% org_npi ~ "organization",
+                              BLG_PRVDR_NPI %in% nonmatch ~ "nonmatch")) |>
+  # If it's same-day same-person, overwrite 
+  # organization overwrites both, individual overwrites nonmatch 
+  group_by(BENE_ID, SRVC_BGN_DT) |>
+  mutate(npi_type = case_when(any(npi_type == "organization") ~ "organization",
+                              any(npi_type == "individual") ~ "individual",
+                              TRUE ~ "nonmatch")) |>
+  slice(1) |>
+  ungroup() |>
+  group_by(npi_type) |>
+  summarise(count = n_distinct(CLM_ID)) |>
+  # Make proportions 
+  mutate(total = sum(count),
+         proportion = round(count/total*100, 2)) 
+  
+  
+```
+
+

@@ -57,7 +57,11 @@ library(haven)
 
 all_states <- open_dataset(here("Trunk", "Derived", "all_states_cmhc.parquet")) |>
   collect() |>
-  filter(!is.na(BLG_PRVDR_NPI))
+  filter(!is.na(BLG_PRVDR_NPI)) |>
+  distinct(BLG_PRVDR_NPI) |>
+  rename(NPI = BLG_PRVDR_NPI)
+
+write_dta(all_states, here("Trunk", "Derived", "for_stata_matching", "cmhc_npis.dta"))
 
 # Want to know how many NPIs found per state 
 found_npi_count <- all_states %>% 
