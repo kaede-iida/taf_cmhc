@@ -123,7 +123,7 @@ new_patient <- function(min_year, state, full_sample){
     left_join(only_jan, by = c("BENE_ID", "org_ID"))       # Add information about the jan 2022 visit 
   
   
-  # Determining spell length 
+  # Determining spell length + differentiate between one month and one-time visitors!!!!
   new_bene_cmhc <- new_patient %>% 
     distinct(BENE_ID, org_ID)
   
@@ -133,7 +133,12 @@ new_patient <- function(min_year, state, full_sample){
     semi_join(new_bene_cmhc, by = c("BENE_ID", "org_ID")) |>   # only keep if new patient jan visitor 
     filter(SRVC_BGN_DT >= "2022-01-01" & SRVC_BGN_DT <= "2022-12-31") |>
     collect() |>
-    mutate(visit_mo = month(SRVC_BGN_DT)) 
+    mutate(visit_mo = month(SRVC_BGN_DT)) |>
+    # Check for one-time visits 
+    group_by(BENE_ID, org_ID) |>
+    mutate(repeat_visits = n_distinct(SRVC_BGN_DT),
+           one_time_visit = if_else(repeat_visits == 1, 1, 0)) |>
+    ungroup() 
   
   month_unique <- this_year %>% 
     distinct(BENE_ID, org_ID, visit_mo)
@@ -156,7 +161,7 @@ new_patient <- function(min_year, state, full_sample){
     ungroup() %>% 
     # all info needed in one row, only keep the first visit
     filter(CLM_ID %in% new_patient$CLM_ID) %>% 
-    select(BENE_ID, org_ID, consecutive_months, last_visit_date)
+    select(BENE_ID, org_ID, consecutive_months, last_visit_date, repeat_visits, one_time_visit)
   
   # Add this to the new patient info 
   new_patient_all <- new_patient %>% 
