@@ -76,11 +76,11 @@ patient_finder <- function(min_year, state){
   return(sample)
 }
 
-# Identifying new patients + diagnosis at first visit + identifying repeaters
+# Identifying new patients + diagnosis at first visit + determining spell length 
 new_patient <- function(min_year, state, full_sample){
-  # First limit to people who had a visit to a CMHC in jan 2022
-  # If visited multiple CMHC, keep everything 
-  # Keep the diagnosis at first visit
+  
+  # All January visitors and their diagnosis 
+  # Keep all unique patient - org pair 
   next_year <- min_year + 1
   path_ot_next <- paste0("/gpfs/milgram/pi/medicaid_lab/data/cms/ingested/TMSIS_taf/taf_other_services_header/year=", 
                          as.character(next_year), "/state=", state, "/data.parquet")
@@ -99,7 +99,7 @@ new_patient <- function(min_year, state, full_sample){
     slice(1) %>% 
     ungroup()
   
-  # Next look back to 2020 and check that there were no CMHC visits 
+  # Next limit the Jan visitors to only new paitents (look back to 2021) 
   # Do this check for every patient - CMHC pair 
   # Check for BH related ED, and any ED 
   
@@ -120,36 +120,50 @@ new_patient <- function(min_year, state, full_sample){
   
   new_patient <- bene_cmhc %>% 
     anti_join(last_year, by = c("BENE_ID", "org_ID")) %>%  # Remove if the cmhc-patient pair was found in the previous year 
-    left_join(only_jan, by = c("BENE_ID", "org_ID")) %>%   # Add information about the jan 2022 visit 
-    group_by(BENE_ID, BLG_PRVDR_NPI) %>%
-    filter()
+    left_join(only_jan, by = c("BENE_ID", "org_ID"))       # Add information about the jan 2022 visit 
   
   
-  # Now look after the CMHC and look at the repeats 
+  # Determining spell length 
+  new_bene_cmhc <- new_patient %>% 
+    distinct(BENE_ID, org_ID)
+  
   this_year <- open_dataset(path_ot_next) |>
     select(BENE_ID, BLG_PRVDR_NPI, CLM_ID, SRVC_BGN_DT) |>
-    filter(BENE_ID %in% new_patient$BENE_ID) |>
-    filter(BLG_PRVDR_NPI %in% new_patient$BLG_PRVDR_NPI) |>
-    filter(!(CLM_ID %in% new_patient$CLM_ID)) |>  # Don't look at the first CMHC visit
+    left_join(cmhc_npis, by = c("BLG_PRVDR_NPI" = "NPI")) |>   # add org_ID
+    semi_join(new_bene_cmhc, by = c("BENE_ID", "org_ID")) |>   # only keep if new patient jan visitor 
+    filter(SRVC_BGN_DT >= "2022-01-01" & SRVC_BGN_DT <= "2022-12-31") |>
     collect() |>
-    left_join(cmhc_npis, by = c("BLG_PRVDR_NPI" = "NPI")) |>
-    # Change this part later when I need a more granular check of repeaters 
-    group_by(BENE_ID, org_ID) |>
-    mutate(repeat_visits = n_distinct(SRVC_BGN_DT)) |> # Repeat is counted by days rather than claims 
-    slice(1) |>
-    ungroup() |>
-    select(BENE_ID, org_ID, repeat_visits)
+    mutate(visit_mo = month(SRVC_BGN_DT)) 
+  
+  month_unique <- this_year %>% 
+    distinct(BENE_ID, org_ID, visit_mo)
+  
+  patient_spell <- this_year %>% 
+    group_by(BENE_ID, org_ID) %>%
+    summarise(consecutive_months = {
+      months_present <- sort(unique(visit_mo))
+      streak <- 0L
+      for (m in 1:12) {
+        if (m %in% months_present) streak <- streak + 1L
+        else break
+        }
+        streak}) %>%
+    right_join(this_year, by = c("BENE_ID", "org_ID")) %>%  
+    # Remove all the visits that happen after the spell break 
+    filter(consecutive_months >= month(SRVC_BGN_DT)) %>% 
+    group_by(BENE_ID, org_ID) %>% 
+    mutate(last_visit_date = max(SRVC_BGN_DT)) %>% 
+    ungroup() %>% 
+    # all info needed in one row, only keep the first visit
+    filter(CLM_ID %in% new_patient$CLM_ID) %>% 
+    select(BENE_ID, org_ID, consecutive_months, last_visit_date)
   
   # Add this to the new patient info 
-  new_patient_repeat <- new_patient %>% 
-    left_join(this_year, by = c("BENE_ID", "org_ID")) %>% 
-    mutate(repeat_visits = if_else(is.na(repeat_visits), 0, repeat_visits))
-  
-  # Add age and sex from the full sample dataset
-  new_patient_demog <- new_patient_repeat %>% 
+  new_patient_all <- new_patient %>% 
+    left_join(patient_spell, by = c("BENE_ID", "org_ID")) %>% 
     left_join(full_sample, by = "BENE_ID")
   
-  return(new_patient_demog)
+  return(new_patient_all)
 }
 
 # Function to use on new patients: previous year health history 
