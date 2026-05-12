@@ -10,5 +10,16 @@ Last Updated: April 29, 2026
 - Identify all CMHC patients, and then filter for the age, enrollment, and eligibility 
 - Filter to only new patients, check CMHC repeating 
 - Check previous year health history 
+- Count the repeat_visits; count the spell length (has to have at least one visit 
+during each calendar month)
+
+3. Cleaning/Other_BH.R
+- This is based on the patients found in step 2. I am finding their behavioral 
+health encounters in the year of (so after) their CMHC visit. 
+
+4. Cleaning/Find_deaths.R
+- This is for finding the number of deaths among the CMHC visitors
+- First find all the people that died during 2022, look for how many people visited 
+  the CMHC in January, and then add that to the data made in step 3
 
 3. Analysis/new_patient_analysis.Rmd
