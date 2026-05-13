@@ -266,7 +266,8 @@ for(st in states){
            last_year_any_ed = any_ed_year) %>% 
     select(BENE_ID, org_ID, AGE, SEX_CD, BLG_PRVDR_NPI, state, repeat_visits,
            visit1_clm_id, visit1_date, visit1_dgns_1, visit1_dgns_2, 
-           last_year_bh_ip, last_year_bh_ed, last_year_any_ed)
+           last_year_bh_ip, last_year_bh_ed, last_year_any_ed, consecutive_months,
+           last_visit_date, one_time_visit)
   
   print(paste0(st, " done"))
   save_name <- paste0("tab1_chars_", st, ".csv")

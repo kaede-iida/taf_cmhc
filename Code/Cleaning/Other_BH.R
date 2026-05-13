@@ -66,18 +66,34 @@ post_cmhc_checker <- function(data, state, year){
   
   # Mental helath tx, BH treatment, 
   ot_head <- open_dataset(path_to_oth) |>
-    select(BENE_ID, MH_DGNS_IND, SUD_DGNS_IND, BLG_PRVDR_NPI) |>
+    select(BENE_ID, MH_DGNS_IND, SUD_DGNS_IND, BLG_PRVDR_NPI, SRVC_BGN_DT) |>
     filter(BENE_ID %in% data$BENE_ID) |>
     filter(MH_DGNS_IND == 1 | SUD_DGNS_IND == 1) |>
     collect() |>
     mutate(any_bh = if_else((MH_DGNS_IND == 1 | SUD_DGNS_IND == 1), 1, 0)) |>
-    # Add the org_ID 
     left_join(cmhc_npis, by = c("BLG_PRVDR_NPI" = "NPI")) |>
-    select(-c("state", "SUD_DGNS_IND"))
+    select(-c("state")) |>
+    rename(followup_org_ID = org_ID)
   
-  check <- ot_head |>
-    ### Think about how to filter out the same CMHCs in the morning
-    
+  dt_ot_bh <- dt_crisis %>% 
+    left_join(ot_head, by = "BENE_ID", relationship = "many-to-many") %>% 
+    group_by(BENE_ID, org_ID) %>% 
+    summarise(
+      mh_other_cmhc = as.integer(any(
+        SRVC_BGN_DT > last_visit_date & MH_DGNS_IND == 1 & 
+          !is.na(followup_org_ID) &      # Is a CMHC
+          followup_org_ID != org_ID       # Is not the same CMHC (> last_visit_date takes care of this)
+      )),
+      mh_non_cmhc = as.integer(any(
+        SRVC_BGN_DT > last_visit_date & MH_DGNS_IND == 1 & 
+          is.na(followup_org_ID)          # Is not a CMHC
+      )),
+      any_mental = as.integer(any(
+        SRVC_BGN_DT > last_visit_date & MH_DGNS_IND == 1 
+      ))
+    ) %>% 
+    right_join(dt_crisis, by = c("BENE_ID", "org_ID")) %>% 
+    mutate(across(c(mh_other_cmhc, mh_non_cmhc, any_mental), ~replace_na(.x, 0)))
   
   # Inpatient 
   inpatient <- open_dataset(path_to_iph) |>
@@ -91,21 +107,21 @@ post_cmhc_checker <- function(data, state, year){
     ungroup() |>
     select(BENE_ID, ip_bh_date)
   
-  dt_inpatient <- dt_crisis %>%             ### Change this after finishing the MH part 
+  dt_inpatient <- dt_ot_bh %>%             
     left_join(inpatient, by = "BENE_ID", relationship = "many-to-many") %>% 
     mutate(bh_inpatient = if_else(visit1_date < ip_bh_date, 1, 0),
            bh_inpatient = if_else(is.na(bh_inpatient), 0, bh_inpatient))
   
-  # Death 
-  death <- open_dataset(path_to_deb) |>
-    select(BENE_ID, DEATH_DT, DEATH_IND) |>
-    filter(BENE_ID %in% data$BENE_ID) |>
-    collect() |>
-    group_by(BENE_ID) |>
-    slice(1)
+  # Death - now I have a separate death dataset 
+  # death <- open_dataset(path_to_deb) |>
+  #   select(BENE_ID, DEATH_DT, DEATH_IND) |>
+  #   filter(BENE_ID %in% data$BENE_ID) |>
+  #   collect() |>
+  #   group_by(BENE_ID) |>
+  #   slice(1)
+  #
   
-  dt_death <- dt_inpatient %>% 
-    left_join(death, by = "BENE_ID") 
+  return(dt_inpatient)
 }
 
 
@@ -133,11 +149,20 @@ all_states <- vector("list", length = length(states))
 for(st in seq_along(states)){
   
   save_name <- paste0("tab1_chars_", states[[st]], ".csv")
-  state <- read_csv(here("Trunk", "Derived", "new_patient_char", save_name)) |>
-    select(BENE_ID, org_ID, state, BLG_PRVDR_NPI, repeat_visits, visit1_date)
+  state_df <- read_csv(here("Trunk", "Derived", "new_patient_char", save_name)) |>
+    select(BENE_ID, org_ID, state, BLG_PRVDR_NPI, repeat_visits, visit1_date, consecutive_months, one_time_visit, 
+           last_visit_date)
   
-  all_states[[st]] <- state
+  table3_dt <- post_cmhc_checker(state_df, states[[st]], 2022)
+  
+  
+  all_states[[st]] <- table3_dt
 }
 
 all_states <- bind_rows(all_states)
+write_csv(all_states, here("Trunk", "Derived", "new_patient_char", "post_cmhc", "alive_post_cmhc.csv"))
+
+
+####################################################################### Analysis 
+
 
