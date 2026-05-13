@@ -50,7 +50,7 @@ sud_list <- paste0("F", 10:19)
 ```
 
 
-# Making the table 
+# Making table 1 (demographics and previous health history for new patients)
 ```{r}
 check <- all_states %>% 
   # Check for the first visit diagnosis type 
@@ -159,6 +159,10 @@ table_data <- bind_rows(total_row, age_rows, sex_rows, dx_rows, hx_rows)
 ```{r}
 library(ggplot2)
 
+# Only look at people with SMI diagnosis 
+all_states <- all_states %>% 
+  filter(visit1_dgns_1 %in% smi_code | visit1_dgns_2 %in% smi_code)
+
 ggplot(all_states, aes(x = repeat_visits)) + 
   geom_histogram(binwidth = 20, fill="#69b3a2", color="#e9ecef", alpha=0.9) +
   labs(x = "Number of visits")
@@ -170,6 +174,149 @@ suppress_20 <- all_states %>%
 ggplot(suppress_20, aes(x = repeat_visits)) + 
   geom_histogram(binwidth = 1, fill="#69b3a2", color="#e9ecef", alpha=0.9) +
   labs(x = "Number of visits")
+
+
+```
+
+# Making table 3 ver1 (post-CMHC BH envounters for new patients)
+```{r}
+all_states <- read_csv(here("Trunk", "Derived", "new_patient_char", "post_cmhc", "alive_post_cmhc.csv"))
+
+# For binary variables 
+bin_row <- function(data, var, label) {
+  data %>%
+    group_by(spell_length) %>%
+    summarise(
+      n   = sum(.data[[var]] == 1, na.rm = TRUE),
+      pct = mean(.data[[var]] == 1, na.rm = TRUE) * 100,
+      .groups = "drop"
+    ) %>%
+    mutate(cell = sprintf("%d (%.1f%%)", n, pct)) %>%
+    select(spell_length, cell) %>%
+    tidyr::pivot_wider(names_from = spell_length, values_from = cell) %>%
+    mutate(Category = "", Variable = label) %>%
+    select(Category, Variable, `One Visit`, `More Than One Visit`)
+}
+
+tab3_dt <- all_states %>% 
+  # Count people without any BH visit instead
+  mutate(none_bh = if_else(any_bh_visit == 1, 0, 1)) %>% 
+  mutate(spell_length = ifelse(repeat_visits == 0, "One Visit", "More Than One Visit"),
+          spell_length = factor(spell_length, levels = c("One Visit", "More Than One Visit")))
+
+tab3_rows <- bind_rows(
+  bin_row(tab3_dt, "crisis_services",  "Crisis Services"),
+  bin_row(tab3_dt, "mh_other_facility",  "MH tx at non-CMHCi"),
+  bin_row(tab3_dt, "mh_other_cmhc", "MH tx at different CMHC"),
+  bin_row(tab3_dt, "none_bh", "No outpatient BH visit"),
+  bin_row(tab3_dt, "bh_ed_visit", "Any ED BH visit"),
+  bin_row(tab3_dt, "bh_inpatient", "Any IP BH visit"),
+  bin_row(tab3_dt, "DEATH_IND", "Death")
+) %>% 
+  select(-c("Category"))
+```
+
+
+# Making table 3 ver 2 (same content, row by MH service presence and location, col by death, ED, IP)
+```{r}
+# Treat death completely separately 
+death <- read_csv(here("Trunk", "Derived", "new_patient_char", "post_cmhc", "dead_post_cmhc.csv")) 
+
+# Define a reusable summary function for one group's data
+summarise_mh <- function(df) {
+  tibble(
+    row_label = c(
+      "Total (N)",
+      "Any MH Tx - At a different CMHC",
+      "Any MH Tx - At a non-CMHC",
+      "Total any MH (not CMHCi)",
+      "No MH Tx after last CMHC visit"
+    ),
+    n = c(
+      nrow(df),
+      sum(df$mh_other_cmhc == 1, na.rm = TRUE),
+      sum(df$mh_non_cmhc   == 1, na.rm = TRUE),
+      sum(df$any_mental    == 1, na.rm = TRUE),
+      sum(df$any_mental    == 0, na.rm = TRUE)
+    )
+  )
+}
+
+# Apply across groups, then pivot so each group becomes a column
+result_pct <- death %>%
+  group_by(one_time_visit) %>%
+  group_modify(~ summarise_mh(.x)) %>%
+  ungroup() %>%
+  group_by(one_time_visit) %>%
+  mutate(
+    total = n[row_label == "Total (N)"],
+    n_pct = paste0(n, " (", round(n / total * 100, 1), "%)")
+  ) %>%
+  ungroup() %>%
+  select(-n, -total) %>%
+  pivot_wider(
+    names_from  = one_time_visit,
+    values_from = n_pct
+  )
+
+
+# Alive people 
+alive <- read_csv(here("Trunk", "Derived", "new_patient_char", "post_cmhc", "alive_post_cmhc.csv"))
+
+all_patients <- alive %>%
+  group_by(one_time_visit) %>%
+  group_modify(~ summarise_mh(.x)) %>%
+  ungroup() %>%
+  group_by(one_time_visit) %>%
+  mutate(
+    total = n[row_label == "Total (N)"],
+    n_pct = paste0(n, " (", round(n / total * 100, 1), "%)")
+  ) %>%
+  ungroup() %>%
+  select(-n, -total) %>%
+  pivot_wider(
+    names_from  = one_time_visit,
+    values_from = n_pct
+  )
+
+had_ed <- alive %>% 
+  filter(bh_ed_visit == 1) %>% 
+  group_by(one_time_visit) %>%
+  group_modify(~ summarise_mh(.x)) %>%
+  ungroup() %>%
+  group_by(one_time_visit) %>%
+  mutate(
+    total = n[row_label == "Total (N)"],
+    n_pct = paste0(n, " (", round(n / total * 100, 1), "%)")
+  ) %>%
+  ungroup() %>%
+  select(-n, -total) %>%
+  pivot_wider(
+    names_from  = one_time_visit,
+    values_from = n_pct
+  )
+
+had_ip <- alive %>% 
+  filter(bh_inpatient == 1) %>% 
+  group_by(one_time_visit) %>%
+  group_modify(~ summarise_mh(.x)) %>%
+  ungroup() %>%
+  group_by(one_time_visit) %>%
+  mutate(
+    total = n[row_label == "Total (N)"],
+    n_pct = paste0(n, " (", round(n / total * 100, 1), "%)")
+  ) %>%
+  ungroup() %>%
+  select(-n, -total) %>%
+  pivot_wider(
+    names_from  = one_time_visit,
+    values_from = n_pct
+  )
+
+# Make the table 
+one_visit <- cbind(all_patients[,1:2], had_ed[,2], had_ip[,2]) 
+
+colnames(one_visit) <- c("MH", "All patients","Had BH ED visit", "Had BH inpatient")
 
 
 ```
