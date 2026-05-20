@@ -321,3 +321,133 @@ colnames(one_visit) <- c("MH", "All patients","Had BH ED visit", "Had BH inpatie
 
 ```
 
+# Table 3 ver 3 (column wise percentage -> rowwise percentage)
+```{r}
+# ----------------------------------------------------------
+# 0. Combine datasets
+# ----------------------------------------------------------
+alive <- read_csv(here("Trunk", "Derived", "new_patient_char", "post_cmhc", "alive_post_cmhc.csv"))
+dead <- read_csv(here("Trunk", "Derived", "new_patient_char", "post_cmhc", "dead_post_cmhc.csv")) 
+
+alive$died <- 0
+dead$died  <- 1
+
+df <- bind_rows(alive, dead)
+
+# ----------------------------------------------------------
+# 1. Helper: build one panel's rows
+# ----------------------------------------------------------
+make_panel <- function(data) {
+
+  total_n <- nrow(data)
+
+  # --- compute row-level flags (mutually exclusive groups) ---
+  # "Any MH Tx" rows: any_mental == 1
+  # "No MH Tx"  row:  any_mental == 0
+
+  row_stats <- function(subset_mask, label1, label2 = NULL) {
+    sub   <- data[subset_mask, ]
+    n_sub <- nrow(sub)
+
+    baseline_pct <- sprintf("%d (%.1f%%)", n_sub, 100 * n_sub / total_n)
+
+    # Had any ED BH visit – row percent within the subset
+    ed_n   <- sum(sub$bh_ed_visit,  na.rm = TRUE)          # <-- adjust var name if needed
+    ip_n   <- sum(sub$bh_inpatient,  na.rm = TRUE)          # <-- adjust var name if needed
+    died_n <- sum(sub$died,       na.rm = TRUE)
+
+    ed_pct   <- if (n_sub > 0) sprintf("%d (%.1f%%)", ed_n,   100 * ed_n   / n_sub) else "—"
+    ip_pct   <- if (n_sub > 0) sprintf("%d (%.1f%%)", ip_n,   100 * ip_n   / n_sub) else "—"
+    died_pct <- if (n_sub > 0) sprintf("%d (%.1f%%)", died_n, 100 * died_n / n_sub) else "—"
+
+    data.frame(
+      label1       = label1,
+      label2       = if (!is.null(label2)) label2 else "",
+      baseline     = baseline_pct,
+      ed_bh        = ed_pct,
+      ip_bh        = ip_pct,
+      died         = died_pct,
+      stringsAsFactors = FALSE
+    )
+  }
+
+  # Total row
+  total_row <- data.frame(
+    label1   = "Total",
+    label2   = "",
+    baseline = sprintf("%d (100%%)", total_n),
+    ed_bh    = sprintf("%d (%.1f%%)", sum(data$bh_ed_visit, na.rm=TRUE),
+                       100 * mean(data$bh_ed_visit, na.rm=TRUE)),
+    ip_bh    = sprintf("%d (%.1f%%)", sum(data$bh_inpatient, na.rm=TRUE),
+                       100 * mean(data$bh_inpatient, na.rm=TRUE)),
+    died     = sprintf("%d (%.1f%%)", sum(data$died, na.rm=TRUE),
+                       100 * mean(data$died, na.rm = TRUE)),
+    stringsAsFactors = FALSE
+  )
+
+  # Any MH Tx rows
+  r1 <- row_stats(data$any_mental == 1 & data$mh_other_cmhc == 1,
+                  "Any MH Tx after last CMHC visit", "At a different CMHC")
+  r2 <- row_stats(data$any_mental == 1 & data$mh_non_cmhc == 1,
+                  "", "At a non-CMHC")
+  r3 <- row_stats(data$any_mental == 1,
+                  "", "Total any MH (not CMHCi)")
+
+  # No MH Tx row
+  r4 <- row_stats(data$any_mental == 0,
+                  "No MH Tx after last CMHC visit", "")
+
+  bind_rows(total_row, r1, r2, r3, r4)
+}
+
+# ----------------------------------------------------------
+# 2. Split by panel
+# ----------------------------------------------------------
+panel_a_data <- df %>% filter(one_time_visit == 1)
+panel_b_data <- df %>% filter(one_time_visit == 0)
+
+n_a     <- nrow(panel_a_data)
+n_total <- nrow(df)
+pct_a   <- round(100 * n_a / n_total, 1)
+
+n_b   <- nrow(panel_b_data)
+pct_b <- round(100 * n_b / n_total, 1)
+
+panel_a <- make_panel(panel_a_data)
+panel_b <- make_panel(panel_b_data)
+
+# ----------------------------------------------------------
+# 3. Add panel header rows and combine
+# ----------------------------------------------------------
+header_row <- function(label) {
+  data.frame(label1=label, label2="", baseline="", ed_bh="", ip_bh="", died="",
+             stringsAsFactors=FALSE)
+}
+
+table_out <- bind_rows(
+  header_row(sprintf("PANEL A: PATIENTS WITH ONE CMHC VISIT (N = %d, %.1f%%)", n_a, pct_a)),
+  panel_a,
+  header_row(sprintf("PANEL B: PATIENTS WITH MORE THAN ONE CMHC VISIT (N = %d, %.1f%%)", n_b, pct_b)),
+  panel_b
+)
+
+# ----------------------------------------------------------
+# 4. Clean up column names for display
+# ----------------------------------------------------------
+names(table_out) <- c(
+  "Row Group",
+  "Sub-row",
+  "All at baseline (death not included) [column %]",
+  "Had any ED BH visit [row %]",
+  "Had any IP BH visit [row %]",
+  "Died [row %]"
+)
+
+# ----------------------------------------------------------
+# 5. Print to console
+# ----------------------------------------------------------
+print(table_out, row.names = FALSE)
+
+write.csv(table_out, here("Output", "Tables", "tab_3_ver3.csv"), row.names = FALSE)
+```
+
